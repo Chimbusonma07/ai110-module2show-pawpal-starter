@@ -23,6 +23,7 @@ classDiagram
         +list~Task~ tasks
         +add_task(task) Task
         +remove_task(name) bool
+        +complete_task(task, on_date) Task
         +get_tasks_by_priority(level) list~Task~
         +create_daily_schedule(schedule) Schedule
     }
@@ -35,11 +36,16 @@ classDiagram
         +bool is_recurring
         +str recurrence
         +str scheduled_time
+        +bool is_complete
+        +str pet_name
+        +str due_date
         +list~Reminder~ reminders
         +add_reminder(reminder) Reminder
         +priority_score() int
         +fits_in(minutes_left) bool
         +is_due_today(date) bool
+        +mark_complete(on_date) Task
+        +next_occurrence(on_date) Task
     }
 
     class Reminder {
@@ -60,6 +66,9 @@ classDiagram
         +add_task(task) None
         +schedule_tasks() list~Task~
         +generate_daily_plan() list~Task~
+        +sort_by_time(tasks) list~Task~
+        +filter_tasks(tasks, is_complete, pet_name) list~Task~
+        +detect_conflicts(tasks) list~str~
         +explain_plan() str
         +total_planned_minutes() int
         +remaining_minutes() int
@@ -88,5 +97,6 @@ classDiagram
     Pet "1" o-- "0..*" Task : needs
     Task "1" *-- "0..*" Reminder : triggers
     Schedule "1" o-- "0..*" Task : plans
+    Task ..> Task : next_occurrence creates
     Task ..> Priority : uses
     Task ..> TaskCategory : uses

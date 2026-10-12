@@ -9,7 +9,7 @@ Schedule fits what it can into the available time and explains the rest.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum
 
@@ -30,6 +30,12 @@ def _weekday_of(date: str) -> str:
         return datetime.strptime(date, _DATE_FORMAT).strftime("%a").lower()
     except ValueError as exc:
         raise ValueError(f"date must look like YYYY-MM-DD, got {date!r}") from exc
+
+
+def _add_days(date: str, days: int) -> str:
+    """Return a "YYYY-MM-DD" string shifted by the given number of days."""
+    _weekday_of(date)  # validates the format with a friendly error
+    return (datetime.strptime(date, _DATE_FORMAT) + timedelta(days=days)).strftime(_DATE_FORMAT)
 
 
 class Priority(Enum):
@@ -62,6 +68,9 @@ _RECURRENCE_ALIASES = {
     "weekends": {"sat", "sun"},
 }
 
+# Recurrences that roll forward into a fresh task when completed, and how far.
+_NEXT_OCCURRENCE_DAYS = {"daily": 1, "weekly": 7}
+
 
 @dataclass
 class Reminder:
@@ -89,6 +98,8 @@ class Task:
 
     `name` is the description, `scheduled_time` the time, `is_recurring` plus
     `recurrence` the frequency, and `is_complete` the completion status.
+    `due_date` ("YYYY-MM-DD") is the first day the task can be planned; blank
+    means it is available right away.
     """
 
     name: str
@@ -103,6 +114,7 @@ class Task:
     # Stamped by Pet.add_task() so a task stays self-describing once the
     # scheduler has flattened tasks from several pets into one list.
     pet_name: str = ""
+    due_date: str = ""
 
     def add_reminder(self, reminder: Reminder) -> Reminder:
         """Attach a reminder to this task and return it."""
@@ -123,23 +135,83 @@ class Task:
     def is_due_today(self, date: str) -> bool:
         """Return True if the recurrence rule puts this task on the given date.
 
-        Recurring tasks accept "daily" (or blank), "weekdays", "weekends", or a
+        Recurring tasks accept "daily" (or blank), "weekly" (the weekday of
+        due_date, or any day if there is none), "weekdays", "weekends", or a
         comma-separated list like "mon,wed,fri". A one-off task is due only on
-        the date it names, or on any date if it names none.
+        the date it names, or on any date if it names none. Nothing is due
+        before its due_date.
         """
+        if self.due_date and date < self.due_date:
+            return False
         rule = self.recurrence.strip().lower()
         if not self.is_recurring:
             return rule in ("", date.strip().lower())
         if rule in ("", "daily"):
             return True
+        if rule == "weekly":
+            return not self.due_date or _weekday_of(date) == _weekday_of(self.due_date)
         if rule in _RECURRENCE_ALIASES:
             return _weekday_of(date) in _RECURRENCE_ALIASES[rule]
         days = {part.strip()[:3] for part in rule.split(",") if part.strip()}
         return _weekday_of(date) in days
 
-    def mark_complete(self) -> None:
-        """Mark this task done so it stops being planned."""
+    def mark_complete(self, on_date: str = "") -> Task | None:
+        """Mark this task done and return its next occurrence, if it has one.
+
+        A "daily" or "weekly" task yields a fresh, incomplete copy due one day
+        or one week after `on_date` (default today), or after its own due_date
+        if that is later. Other tasks, or one already done, return None. The
+        caller owns storing the new task — Pet.complete_task() does that.
+
+        Args:
+            on_date: The "YYYY-MM-DD" the task was finished. Blank means today.
+
+        Returns:
+            The next-occurrence Task (not yet attached to any pet), or None if
+            the task does not roll forward or was already complete. Returning
+            None on a repeat call keeps a double-click from queueing two copies.
+        """
+        if self.is_complete:
+            return None
         self.is_complete = True
+        return self.next_occurrence(on_date)
+
+    def next_occurrence(self, on_date: str = "") -> Task | None:
+        """Return a new task for the next daily/weekly occurrence, else None.
+
+        The next due date is counted from whichever is later: the day the task
+        was completed or its own due_date. Counting from the later one means a
+        task finished early (before it was due) still moves a full step ahead,
+        and a late task never comes back due in the past.
+
+        The copy is made with dataclasses.replace(), so it keeps the name,
+        pet, duration, priority, recurrence and preferred time. Its reminders
+        are copied too, reset to unsent, so the two tasks never share them.
+        This method does not change `self`.
+
+        Args:
+            on_date: The "YYYY-MM-DD" the task was finished. Blank means today.
+
+        Returns:
+            A new, incomplete Task whose due_date is one step (1 day for
+            "daily", 7 for "weekly") after the base date, or None for any other
+            recurrence or a one-off task.
+
+        Example:
+            A daily task due "2026-10-12" and completed that day comes back
+            due "2026-10-13"; a weekly one comes back due "2026-10-19".
+        """
+        step = _NEXT_OCCURRENCE_DAYS.get(self.recurrence.strip().lower())
+        if not self.is_recurring or step is None:
+            return None
+        completed_on = on_date or datetime.now().strftime(_DATE_FORMAT)
+        base = max(completed_on, self.due_date)
+        return replace(
+            self,
+            is_complete=False,
+            due_date=_add_days(base, step),
+            reminders=[replace(reminder, sent=False) for reminder in self.reminders],
+        )
 
     def reset(self) -> None:
         """Clear completion and timing, ready for the next day."""
@@ -177,6 +249,27 @@ class Pet:
                 del self.tasks[index]
                 return True
         return False
+
+    def complete_task(self, task: Task, on_date: str = "") -> Task | None:
+        """Mark one of this pet's tasks done and store its next occurrence.
+
+        Task.mark_complete() can build the next occurrence but cannot store
+        it, because a Task does not know its Pet. This method does both, so
+        callers should use it rather than calling task.mark_complete() alone.
+        The finished task stays in `self.tasks` as a record of the work.
+
+        Args:
+            task: One of this pet's tasks.
+            on_date: The "YYYY-MM-DD" the task was finished. Blank means today.
+
+        Returns:
+            The newly created task for a daily/weekly task (already added to
+            this pet), else None.
+        """
+        next_task = task.mark_complete(on_date)
+        if next_task is not None:
+            self.add_task(next_task)
+        return next_task
 
     def get_tasks_by_priority(self, level: Priority) -> list[Task]:
         """Return this pet's tasks at the given priority level."""
@@ -237,6 +330,130 @@ class Schedule:
             task.scheduled_time = clock
             clock = _add_minutes(clock, task.duration_minutes)
         return self.planned_tasks
+
+    def sort_by_time(self, tasks: list[Task] | None = None) -> list[Task]:
+        """Return tasks ordered by scheduled_time, earliest first.
+
+        The sort key is a lambda that returns a pair:
+        `(task.scheduled_time == "", task.scheduled_time)`. Python compares the
+        pairs item by item, so the first item (False before True) puts every
+        timed task ahead of the untimed ones, and the second orders the timed
+        tasks by clock. Zero-padded "HH:MM" strings sort correctly as plain
+        text ("07:05" < "09:00" < "14:30"), so no time parsing is needed.
+        An unpadded time such as "7:30" would sort after "10:00".
+
+        The sort is stable: tasks with the same time keep their input order.
+        Runs in O(n log n) time.
+
+        Args:
+            tasks: The tasks to sort. Defaults to the candidate tasks.
+
+        Returns:
+            A new sorted list. The input list is left unchanged.
+        """
+        if tasks is None:
+            tasks = self.candidate_tasks
+        return sorted(
+            tasks,
+            key=lambda task: (task.scheduled_time == "", task.scheduled_time),
+        )
+
+    def filter_tasks(
+        self,
+        tasks: list[Task] | None = None,
+        *,
+        is_complete: bool | None = None,
+        pet_name: str | None = None,
+    ) -> list[Task]:
+        """Return tasks matching the given completion status and/or pet name.
+
+        Each filter left as None matches everything, so passing both narrows by
+        both (logical AND) and passing neither returns every task. Runs in a
+        single O(n) pass and keeps the input order, so it can be combined with
+        sort_by_time() in either order.
+
+        Args:
+            tasks: The tasks to filter. Defaults to the candidate tasks.
+            is_complete: Keep only finished (True) or unfinished (False) tasks.
+                Keyword-only, so a bare positional True cannot be misread.
+            pet_name: Keep only this pet's tasks. Matches ignore case.
+
+        Returns:
+            A new list of the matching tasks.
+
+        Example:
+            `schedule.filter_tasks(pet_name="Rex", is_complete=False)` returns
+            Rex's unfinished tasks.
+        """
+        if tasks is None:
+            tasks = self.candidate_tasks
+        return [
+            task
+            for task in tasks
+            if (is_complete is None or task.is_complete == is_complete)
+            and (pet_name is None or task.pet_name.lower() == pet_name.lower())
+        ]
+
+    def detect_conflicts(self, tasks: list[Task] | None = None) -> list[str]:
+        """Return a warning for each time slot claimed by more than one task.
+
+        Lightweight on purpose: tasks clash only when they start at the same
+        "HH:MM", not when their durations overlap. A 07:00 walk of 30 minutes
+        and a 07:15 feed are therefore not reported.
+
+        The method works in two passes. First it groups the tasks by start
+        time in a dict, skipping tasks that are done, untimed, or not due on
+        this schedule's date. It parses and re-formats each time, so "7:30"
+        and "07:30" count as the same slot. Then it reports every slot holding
+        two or more tasks, in clock order, saying whether they belong to the
+        same pet or different pets. Runs in O(n) time, plus sorting the slots.
+
+        It never raises: a task whose time (or the schedule's date) cannot be
+        parsed gets a warning of its own and is left out of the check.
+
+        Args:
+            tasks: The tasks to check. Defaults to the candidate tasks.
+
+        Returns:
+            Warning strings, one per clashing slot or bad task. An empty list
+            means no conflicts.
+
+        Example:
+            "WARNING: 2 tasks at 08:00, different pets: Thyroid pill for
+            Mochi, Breakfast for Rex."
+        """
+        if tasks is None:
+            tasks = self.candidate_tasks
+        warnings: list[str] = []
+        by_time: dict[str, list[Task]] = {}
+        for task in tasks:
+            if task.is_complete or not task.scheduled_time:
+                continue
+            try:
+                if not task.is_due_today(self.date):
+                    continue
+                # Normalise so "7:30" and "07:30" land in the same slot.
+                clock = datetime.strptime(task.scheduled_time, _TIME_FORMAT).strftime(_TIME_FORMAT)
+            except ValueError:
+                warnings.append(
+                    f"WARNING: could not check {task.label()} — "
+                    f"bad time {task.scheduled_time!r} or date {self.date!r}."
+                )
+                continue
+            by_time.setdefault(clock, []).append(task)
+
+        for clock in sorted(by_time):
+            clashing = by_time[clock]
+            if len(clashing) < 2:
+                continue
+            pets = {task.pet_name for task in clashing}
+            if len(pets) > 1:
+                scope = "different pets"
+            else:
+                scope = f"same pet ({clashing[0].pet_name})" if clashing[0].pet_name else "same pet"
+            names = ", ".join(task.label() for task in clashing)
+            warnings.append(f"WARNING: {len(clashing)} tasks at {clock}, {scope}: {names}.")
+        return warnings
 
     def explain_plan(self) -> str:
         """Return a readable explanation of why each task was chosen or skipped."""

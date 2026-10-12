@@ -1,7 +1,7 @@
 """PawPal+ terminal demo.
 
-Builds a small household — one owner, two pets, six care tasks — and prints
-today's schedule. Run it with:
+Builds a small household — one owner, two pets, eight care tasks — and prints
+today's schedule, warning about any tasks that share a time slot. Run it with:
 
     python main.py
 """
@@ -32,7 +32,7 @@ def end_time(start: str, duration_minutes: int) -> str:
     return (base + timedelta(minutes=duration_minutes)).strftime("%H:%M")
 
 
-def build_household() -> Owner:
+def build_household(today: str) -> Owner:
     """Create the owner, their pets, and the tasks each pet needs."""
     jordan = Owner(
         name="Jordan Avery",
@@ -52,22 +52,48 @@ def build_household() -> Owner:
     )
     rex = jordan.add_pet(Pet(name="Rex", species="dog", breed="corgi", age=5))
 
+    # Tasks are added deliberately out of time order (each one carries a
+    # preferred time) so the demo can show Scheduler.sort_by_time() fixing it.
+    litter = mochi.add_task(
+        Task("Litter box", TaskCategory.GROOMING, 10, Priority.MEDIUM, True, "daily",
+             scheduled_time="12:00")
+    )
     mochi.add_task(
-        Task("Morning feed", TaskCategory.FEEDING, 10, Priority.HIGH, True, "daily")
+        Task("Morning feed", TaskCategory.FEEDING, 10, Priority.HIGH, True, "daily",
+             scheduled_time="07:30")
     )
     pill = mochi.add_task(
-        Task("Thyroid pill", TaskCategory.MEDICATION, 5, Priority.MEDIUM, True, "daily")
+        Task("Thyroid pill", TaskCategory.MEDICATION, 5, Priority.MEDIUM, True, "daily",
+             scheduled_time="08:00")
     )
     pill.add_reminder(Reminder("Give Mochi her thyroid pill", "08:00"))
+    # Deliberate clash with Morning feed — same pet, same 07:30 slot.
     mochi.add_task(
-        Task("Litter box", TaskCategory.GROOMING, 10, Priority.MEDIUM, True, "daily")
+        Task("Brushing", TaskCategory.GROOMING, 5, Priority.LOW, True, "daily",
+             scheduled_time="07:30")
     )
 
-    rex.add_task(Task("Morning walk", TaskCategory.WALK, 30, Priority.HIGH, True, "daily"))
-    rex.add_task(Task("Evening walk", TaskCategory.WALK, 45, Priority.MEDIUM, True, "daily"))
     rex.add_task(
-        Task("Nail trim", TaskCategory.GROOMING, 20, Priority.LOW, True, "weekends")
+        Task("Evening walk", TaskCategory.WALK, 45, Priority.MEDIUM, True, "daily",
+             scheduled_time="18:00")
     )
+    rex.add_task(
+        Task("Nail trim", TaskCategory.GROOMING, 20, Priority.LOW, True, "weekends",
+             scheduled_time="10:00")
+    )
+    rex.add_task(
+        Task("Morning walk", TaskCategory.WALK, 30, Priority.HIGH, True, "daily",
+             scheduled_time="07:00")
+    )
+    # Deliberate clash with Mochi's Thyroid pill — different pets, same 08:00 slot.
+    rex.add_task(
+        Task("Breakfast", TaskCategory.FEEDING, 10, Priority.HIGH, True, "daily",
+             scheduled_time="08:00")
+    )
+
+    # Already scooped this morning, so the completion filter has something to
+    # show. It's a daily task, so completing it queues tomorrow's litter box.
+    mochi.complete_task(litter, today)
 
     return jordan
 
@@ -85,6 +111,42 @@ def print_header(owner: Owner, date: str) -> None:
         for note in pet.medical_notes:
             print(f"        note: {note}")
     print(f"Window: {START_TIME} onward, {AVAILABLE_MINUTES} minutes free")
+
+
+def print_task_list(title: str, tasks: list[Task]) -> None:
+    """Print a titled list of tasks with their preferred time and status."""
+    print(f"\n{title}")
+    print("-" * LINE_WIDTH)
+    if not tasks:
+        print("  (none)")
+        return
+    for task in tasks:
+        status = "done" if task.is_complete else "to do"
+        due = f"  (due {task.due_date})" if task.due_date else ""
+        print(
+            f"  {task.scheduled_time or '--:--':<7}{task.name:<20}{task.pet_name:<8}{status}{due}"
+        )
+
+
+def print_sorting_and_filtering(owner: Owner, date: str) -> None:
+    """Show tasks in the order they were added, then sorted and filtered."""
+    preview = Schedule(date=date, start_time=START_TIME, available_minutes=AVAILABLE_MINUTES)
+    for task in owner.get_all_tasks():
+        preview.add_task(task)
+
+    print_task_list("TASKS AS ADDED (out of order)", preview.candidate_tasks)
+    print_task_list("SORTED BY TIME", preview.sort_by_time())
+    print_task_list("FILTER: Rex's tasks", preview.filter_tasks(pet_name="Rex"))
+    print_task_list("FILTER: completed", preview.filter_tasks(is_complete=True))
+    print_task_list(
+        "FILTER: Mochi's unfinished tasks, by time",
+        preview.sort_by_time(preview.filter_tasks(pet_name="Mochi", is_complete=False)),
+    )
+
+    print("\nTIME CONFLICTS")
+    print("-" * LINE_WIDTH)
+    for warning in preview.detect_conflicts() or ["No two tasks share a time slot."]:
+        print(f"  {warning}")
 
 
 def print_schedule(schedule: Schedule) -> None:
@@ -126,7 +188,8 @@ def print_leftovers(owner: Owner, schedule: Schedule, date: str) -> None:
         print("\nNOT DUE TODAY")
         print("-" * LINE_WIDTH)
         for task in not_due:
-            print(f"  {task.label()} — runs {task.recurrence}")
+            when = f"next due {task.due_date}" if task.due_date > date else f"runs {task.recurrence}"
+            print(f"  {task.label()} — {when}")
 
 
 def print_reminders(schedule: Schedule) -> None:
@@ -141,13 +204,18 @@ def print_reminders(schedule: Schedule) -> None:
 
 
 def main() -> None:
-    jordan = build_household()
     today = datetime.now().strftime("%Y-%m-%d")
+    jordan = build_household(today)
+
+    print_header(jordan, today)
+
+    # Runs before planning, because generate_daily_plan() overwrites each
+    # planned task's scheduled_time with its slot in the day.
+    print_sorting_and_filtering(jordan, today)
 
     # The owner flattens tasks across pets, then the schedule fits what it can.
     schedule = jordan.plan_day(today, START_TIME, AVAILABLE_MINUTES)
 
-    print_header(jordan, today)
     print_schedule(schedule)
     print_leftovers(jordan, schedule, today)
     print_reminders(schedule)
