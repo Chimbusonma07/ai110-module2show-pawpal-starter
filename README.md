@@ -68,6 +68,18 @@ Confidence Level: 4
 ![alt text](image-3.png)
 ```
 
+## ✨ Features
+
+- **Priority-based daily planning:** `Scheduler.schedule_tasks()` ranks tasks by priority score, then shorter duration, then name. It fits tasks into the owner's free minutes one at a time, highest-ranked first, and skips any that no longer fit. `generate_daily_plan()` then gives each planned task a back-to-back time slot from the start time.
+- **Health tie-breaker:** medication and vet tasks get a +5 score bonus. This breaks ties within a priority level, but never lifts a task above a higher priority (HIGH = 30, MEDIUM = 20, LOW = 10).
+- **Sorting by time:** `Scheduler.sort_by_time()` orders tasks by `"HH:MM"`, earliest first, using a lambda sort key. Unpadded times such as `"7:30"` are normalized, tasks with no time go last, and tasks with the same time keep their order.
+- **Filtering by pet and status:** `Scheduler.filter_tasks()` keeps one pet's tasks (case-insensitive), done or unfinished tasks, or both at once. The result can then be sorted.
+- **Recurrence rules:** `Task.is_due_today()` decides whether a task belongs on a date. It understands `daily`, `weekly`, `weekdays`, `weekends`, day lists like `mon,wed,fri`, and one-off tasks, and nothing is due before its `due_date`.
+- **Daily and weekly recurrence:** completing a `daily` or `weekly` task with `Pet.complete_task()` creates its next occurrence, due 1 or 7 days later. It handles month, year and leap-day boundaries, and a repeat click can't queue two copies.
+- **Conflict warnings:** `Scheduler.detect_conflicts()` flags tasks that start at the same time, for the same pet or different pets. It returns warning messages and never crashes, even on a malformed time.
+- **Explained plans:** `Scheduler.explain_plan()` says why each task was planned (its priority, category and score) or skipped (not enough time left).
+- **Reminders:** `Scheduler.send_reminders()` sends each planned task's unsent reminders once.
+
 ## 📐 Smarter Scheduling
 
 All scheduling logic lives in [`pawpal_system.py`](pawpal_system.py). `Scheduler` and `Owner` are aliases for the UML's `Schedule` and `User` classes.
@@ -150,12 +162,150 @@ In the Streamlit app, ticking a task under **Mark tasks done** calls `Pet.comple
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+Start the app with `streamlit run app.py`, or run the terminal demo with `python main.py`.
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+### Main UI features
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
+The Streamlit page is one scrolling screen with four sections:
+
+| Section | What you can do |
+|---------|-----------------|
+| **Owner details** | Edit the owner's name and email (collapsed by default). |
+| **Add a Pet** | Enter a name, species, breed, age and medical notes. A table lists every pet and how many tasks it has. |
+| **Schedule a Task** | Pick a pet and enter a title, category, duration, priority, frequency (daily, weekly, weekdays, weekends or one-off), a preferred time and an optional reminder time. Times that aren't `HH:MM` are rejected with a warning. Below the form, **Your tasks** lists every task with filters for **Pet** and **Status** (All / To do / Done), sorted by preferred time. |
+| **Build Schedule** | Choose a date, start time and minutes free. The page warns about time conflicts before you plan. **Generate schedule** builds the plan. |
+
+After you generate a plan, the page shows:
+
+- a success summary, the time-ordered plan table and metrics (tasks planned, minutes used, minutes free);
+- a **Resolved time conflicts** expander, if any tasks shared a time;
+- a **Didn't fit** warning and table;
+- a **Not due today** table;
+- the reminders, and a **Why this plan?** expander;
+- **Mark tasks done** checkboxes.
+
+### Example workflow
+
+1. **Add a pet:** enter "Mochi", a cat, with the medical note "hypothyroid", and click **Add pet**. Mochi appears in the pets table. Add a second pet, "Rex", a dog.
+2. **Schedule tasks:** for Mochi, add "Morning feed" (feeding, 10 min, high, daily, 07:30) and "Thyroid pill" (medication, 5 min, medium, daily, 08:00, remind at 08:00). For Rex, add "Breakfast" (feeding, 10 min, high, daily, 08:00) and "Evening walk" (walk, 45 min, medium, daily).
+3. **Browse tasks:** under **Your tasks**, set **Pet** to Rex to see only Rex's tasks, or **Status** to To do. The list stays sorted by time, and Evening walk, which has no time, is listed last.
+4. **Check for conflicts:** in **Build Schedule**, a yellow warning reports `2 tasks at 08:00, different pets: Thyroid pill for Mochi, Breakfast for Rex`.
+5. **Generate today's schedule:** set the start to 07:30 with 60 minutes free and click **Generate schedule**.
+   - The high-priority tasks are placed first, in back-to-back slots.
+   - Evening walk lands under **Didn't fit**, because it needs 45 minutes and only 35 are left.
+   - The **Resolved 1 time conflict(s)** expander explains that each task now has its own slot.
+6. **Read the reasoning:** open **Why this plan?** to see each task's priority, category and score. The thyroid pill reminder appears as a blue info box.
+7. **Mark a task done:** tick **Morning feed for Mochi**. Because it is daily, a green message says `Next Morning feed for Mochi queued for <tomorrow>`. On the next plan it moves to **Not due today**, listed as "next due" tomorrow.
+
+### Key scheduler behaviors shown
+
+- **Sorting:** `Scheduler.sort_by_time()` orders the **Your tasks** list, the plan table and the **Not due today** table.
+- **Filtering:** the **Pet** and **Status** controls call `Scheduler.filter_tasks()`. The planner itself leaves out tasks that are done or not due (`Task.is_due_today()`) and skips ones that don't fit (`Task.fits_in()`).
+- **Conflict warnings:** `Scheduler.detect_conflicts()` runs for the chosen date before planning, and the conflicts are kept so the plan can explain them.
+- **Priority planning:** `Scheduler.schedule_tasks()` and `generate_daily_plan()` pick and order the day's tasks, and `explain_plan()` explains the result.
+- **Recurrence:** **Mark tasks done** calls `Pet.complete_task()`, which queues the next daily or weekly occurrence with a future `due_date`.
+
+### Sample CLI output
+
+`python main.py` builds a household of two pets with nine tasks: eight that need doing, plus a Litter box already completed today. The tasks are added out of time order, with two deliberate clashes. The demo then shows sorting, filtering, conflict warnings, recurrence and the final plan. The date shown is whatever day you run it.
+
+```text
+====================================================================
+                     PawPal+ — Today's Schedule
+====================================================================
+Owner : Jordan Avery (jordan@example.com)
+Date  : Monday, 12 October 2026
+Pet   : Mochi — shorthair cat, age 3
+        note: hypothyroid — pill every morning
+Pet   : Rex — corgi dog, age 5
+Window: 07:30 onward, 90 minutes free
+
+TASKS AS ADDED (out of order)
+--------------------------------------------------------------------
+  12:00  Litter box          Mochi   done
+  07:30  Morning feed        Mochi   to do
+  08:00  Thyroid pill        Mochi   to do
+  07:30  Brushing            Mochi   to do
+  12:00  Litter box          Mochi   to do  (due 2026-10-13)
+  18:00  Evening walk        Rex     to do
+  10:00  Nail trim           Rex     to do
+  07:00  Morning walk        Rex     to do
+  08:00  Breakfast           Rex     to do
+
+SORTED BY TIME
+--------------------------------------------------------------------
+  07:00  Morning walk        Rex     to do
+  07:30  Morning feed        Mochi   to do
+  07:30  Brushing            Mochi   to do
+  08:00  Thyroid pill        Mochi   to do
+  08:00  Breakfast           Rex     to do
+  10:00  Nail trim           Rex     to do
+  12:00  Litter box          Mochi   done
+  12:00  Litter box          Mochi   to do  (due 2026-10-13)
+  18:00  Evening walk        Rex     to do
+
+FILTER: Rex's tasks
+--------------------------------------------------------------------
+  18:00  Evening walk        Rex     to do
+  10:00  Nail trim           Rex     to do
+  07:00  Morning walk        Rex     to do
+  08:00  Breakfast           Rex     to do
+
+FILTER: completed
+--------------------------------------------------------------------
+  12:00  Litter box          Mochi   done
+
+FILTER: Mochi's unfinished tasks, by time
+--------------------------------------------------------------------
+  07:30  Morning feed        Mochi   to do
+  07:30  Brushing            Mochi   to do
+  08:00  Thyroid pill        Mochi   to do
+  12:00  Litter box          Mochi   to do  (due 2026-10-13)
+
+TIME CONFLICTS
+--------------------------------------------------------------------
+  WARNING: 2 tasks at 07:30, same pet (Mochi): Morning feed for Mochi, Brushing for Mochi.
+  WARNING: 2 tasks at 08:00, different pets: Thyroid pill for Mochi, Breakfast for Rex.
+
+TODAY'S SCHEDULE
+--------------------------------------------------------------------
+  TIME           TASK                PET      MINS  CATEGORY
+  07:30-07:40    Breakfast           Rex        10  feeding
+  07:40-07:50    Morning feed        Mochi      10  feeding
+  07:50-08:20    Morning walk        Rex        30  walk
+  08:20-08:25    Thyroid pill        Mochi       5  medication
+  08:25-08:30    Brushing            Mochi       5  grooming
+--------------------------------------------------------------------
+  5 tasks, 60 min planned, 30 min free
+
+DIDN'T FIT TODAY
+--------------------------------------------------------------------
+  Evening walk for Rex — needs 45 min, only 30 min left
+
+NOT DUE TODAY
+--------------------------------------------------------------------
+  Litter box for Mochi — next due 2026-10-13
+  Nail trim for Rex — runs weekends
+
+REMINDERS
+--------------------------------------------------------------------
+  [08:00] Give Mochi her thyroid pill
+
+WHY THIS PLAN
+--------------------------------------------------------------------
+Plan for 2026-10-12 starting 07:30 (90 min available):
+  07:30  Breakfast for Rex — 10 min, high priority feeding (score 30), and it fit the time left.
+  07:40  Morning feed for Mochi — 10 min, high priority feeding (score 30), and it fit the time left.
+  07:50  Morning walk for Rex — 30 min, high priority walk (score 30), and it fit the time left.
+  08:20  Thyroid pill for Mochi — 5 min, medium priority medication (score 25), and it fit the time left.
+  08:25  Brushing for Mochi — 5 min, low priority grooming (score 10), and it fit the time left.
+  skipped   Evening walk for Rex — needs 45 min, only 30 left.
+  Total planned 60 min; 30 min unused.
+```
+
+What to notice in this output:
+
+- **Sorting:** the tasks were added out of order, and **SORTED BY TIME** puts them in clock order.
+- **Recurrence:** completing today's daily Litter box queued tomorrow's copy (`due 2026-10-13`), which shows under **NOT DUE TODAY**.
+- **Conflict warnings:** both deliberate clashes are flagged, one for the same pet and one for different pets.
+- **The plan:** the three high-priority tasks come first (equal scores are ordered by duration, then name), followed by the medication bonus (25) and the low-priority brushing (10). The 45-minute Evening walk doesn't fit in the 30 minutes left.

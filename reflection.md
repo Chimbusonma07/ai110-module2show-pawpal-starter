@@ -77,11 +77,22 @@ Three core actions:
 
 - What behaviors did you test?
 - Why were these tests important?
+- ANSWER: The suite in `tests/test_pawpal.py` has 25 tests, grouped around the three features that make the scheduler "smart":
+- **Sorting.** `sort_by_time()` puts scrambled tasks in clock order, puts tasks with no time last (a blank string would otherwise sort *first*), keeps tasks with the same time in their original order, handles an empty list, and never changes the list it was given. One test checks that an unpadded `"7:30"` sorts before `"10:00"`.
+- **Recurrence.** Completing a daily task creates a new task due the next day, and a weekly one comes back seven days later on the same weekday only. The date maths survives the end of a month, the end of a year and leap years (Feb 28 → Feb 29 in 2028, but → Mar 1 in 2027). Early and late completions both land on a sensible date, and completing the same task twice never creates two copies. One end-to-end test checks the new copy shows up in *tomorrow's* plan and not today's.
+- **Conflict detection.** Tasks at the same time are flagged, and the warning says whether they belong to the same pet or different pets. Three tasks in one slot give one warning, unique times give none, and finished, untimed or not-due tasks are ignored. A bad time like `"noon"` produces a warning instead of a crash.
+- Why they mattered: these are the places where the code makes a decision the owner can't see. If sorting is wrong, the list just *looks* slightly off and nobody notices. If recurrence is wrong, a daily medication quietly stops coming back, which is the worst failure this app could have. The tests also found two real bugs. An unpadded `"7:30"` sorted after `"10:00"` because times were compared as text. And a badly formatted date in `mark_complete()` marked the task done *before* failing, so the next occurrence was lost for good. I first wrote both tests as expected failures (`xfail`) to record the bugs, then fixed the code, and now all 25 pass. Neither bug showed up in `main.py`, because the demo only ever used tidy input.
 
 **b. Confidence**
 
 - How confident are you that your scheduler works correctly?
 - What edge cases would you test next if you had more time?
+- ANSWER: **4 out of 5.** I'm confident in the parts that are tested: sorting, filtering, recurrence and conflict detection all have tests that check the hard cases, not just the happy path, and I've run both `main.py` and the Streamlit app to see the results with my own eyes. It isn't a 5 because of things I *know* the tests don't cover:
+- **Preferred times get overwritten.** `generate_daily_plan()` replaces each planned task's preferred time with its slot. After planning, the original time is gone, so conflict checks and sorting work on the slot times instead. I'd test that preferred times survive planning, which really means adding a separate `preferred_time` field first.
+- **Plans that run past midnight.** A plan starting at 23:30 with 60 free minutes would give its last task a time like `"00:20"`, and `sort_by_time()` would then put it *first*.
+- **Identical tasks entered twice.** `Schedule.add_task()` treats two tasks with the same details as one task, so a "Walk, Rex, 08:00" entered twice is planned once and never flagged as a conflict. I'd decide whether that is a feature or a bug, and test whichever it is.
+- **Overlapping durations.** Conflict detection only compares start times on purpose, so a 30-minute walk at 07:00 and a feed at 07:15 pass silently. If I made it smarter, the first tests would cover back-to-back tasks (ending exactly when the next starts), which must *not* count as a clash.
+- **The Streamlit UI itself.** I checked it by driving it with Streamlit's `AppTest`, but that isn't saved as a test, so a future change to `app.py` could break the filters or the "Mark tasks done" flow without any test failing.
 
 ---
 
@@ -90,11 +101,18 @@ Three core actions:
 **a. What went well**
 
 - What part of this project are you most satisfied with?
+- ANSWER: The way the plan **explains itself**. Every planned task comes with a reason ("high priority feeding, score 30, and it fit the time left"), and every skipped task says what it needed ("needs 45 min, only 30 left"). That was the requirement I cared most about, and it shaped the design: it's why I kept the greedy scheduler instead of an optimiser (see 2b). I'm also happy with how small the "smart" features stayed. Sorting, filtering and conflict detection are each one short method on `Scheduler` that works on any list of tasks, so the CLI demo, the Streamlit page and the tests all use exactly the same code instead of three slightly different copies.
 
 **b. What you would improve**
 
 - If you had another iteration, what would you improve or redesign?
+- ANSWER: The biggest thing is splitting **`scheduled_time` into two fields**. Right now one field means both "when the owner would like to do this" and "the slot the plan gave it", and planning overwrites the first with the second. That one shortcut causes most of the rough edges I listed in 4b: conflict warnings disappear after you generate a plan, and the Streamlit page has to save them separately just to keep explaining them. A `preferred_time` that planning never touches would also let the scheduler actually *use* the preference, putting the 07:30 feed at 07:30 instead of just wherever it falls in the queue.
+- Smaller things:
+  - Let `weekdays` and `weekends` tasks roll forward when completed, the way `daily` and `weekly` do.
+  - Make conflict detection notice overlapping durations, not just identical start times.
+  - Give the app a way to edit or delete a task. Right now the only fix for a typo is to add the task again.
 
 **c. Key takeaway**
 
 - What is one important thing you learned about designing systems or working with AI on this project?
+- ANSWER: **A passing test suite only tells you about the cases you thought of.** My first tests all passed, and so did the demo, because I only ever gave them sensible input. Things changed when I asked a different question: "what are the edge cases for a scheduler with sorting and recurrence?" Within one round, that turned up two real bugs, the unpadded-time sort and the lost recurrence. The same lesson applies to working with AI: it's very good at writing code that works for the example in front of it, and it's just as fast at finding where that code breaks *if you ask it to look*. The useful habit wasn't trusting or distrusting the AI. It was keeping two separate questions, "build this" and "now try to break it", and never letting the first stand in for the second. On the design side, keeping the UML up to date with the code (`diagrams/uml_final.mmd`) showed me the same thing: relationships I'd added without thinking, like a Task creating its own next occurrence, only became obvious once I had to draw them.

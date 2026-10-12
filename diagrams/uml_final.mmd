@@ -1,0 +1,123 @@
+classDiagram
+    %% PawPal+ — pet care planning assistant
+    %% Final UML, matching the implementation in pawpal_system.py.
+    %% Owner and Scheduler (the names used in main.py, app.py and the tests) are
+    %% aliases for User and Schedule. Methods shown returning Task may return None.
+
+    class User {
+        +str name
+        +str email
+        +str phone_number
+        +str address
+        +list~Pet~ pets
+        +list~Schedule~ schedules
+        +add_pet(pet) Pet
+        +get_pet(name) Pet
+        +get_all_tasks() list~Task~
+        +get_due_tasks(date) list~Task~
+        +set_availability(date, start_time, minutes) Schedule
+        +plan_day(date, start_time, minutes) Schedule
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +list~str~ medical_notes
+        +list~Task~ tasks
+        +add_task(task) Task
+        +remove_task(name) bool
+        +complete_task(task, on_date) Task
+        +get_tasks_by_priority(level) list~Task~
+        +create_daily_schedule(schedule) Schedule
+    }
+
+    class Task {
+        +str name
+        +TaskCategory category
+        +int duration_minutes
+        +Priority priority
+        +bool is_recurring
+        +str recurrence
+        +str scheduled_time
+        +bool is_complete
+        +list~Reminder~ reminders
+        +str pet_name
+        +str due_date
+        +add_reminder(reminder) Reminder
+        +priority_score() int
+        +fits_in(minutes_left) bool
+        +is_due_today(date) bool
+        +mark_complete(on_date) Task
+        +next_occurrence(on_date) Task
+        +reset() None
+        +label() str
+    }
+
+    class Reminder {
+        +str message
+        +str remind_at
+        +bool recurring
+        +bool sent
+        +send() str
+        +snooze(minutes) None
+    }
+
+    class Schedule {
+        +str date
+        +str start_time
+        +int available_minutes
+        +list~Task~ candidate_tasks
+        +list~Task~ planned_tasks
+        +list~Task~ skipped_tasks
+        +add_task(task) None
+        +schedule_tasks() list~Task~
+        +generate_daily_plan() list~Task~
+        +sort_by_time(tasks) list~Task~
+        +filter_tasks(tasks, is_complete, pet_name) list~Task~
+        +detect_conflicts(tasks) list~str~
+        +explain_plan() str
+        +total_planned_minutes() int
+        +remaining_minutes() int
+        +send_reminders() list~str~
+    }
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+    }
+
+    class TaskCategory {
+        <<enumeration>>
+        WALK
+        FEEDING
+        MEDICATION
+        GROOMING
+        VET
+        ENRICHMENT
+    }
+
+    %% Ownership: User -> Pet -> Task -> Reminder
+    User "1" o-- "0..*" Pet : owns
+    Pet "1" o-- "0..*" Task : needs
+    Task "1" *-- "0..*" Reminder : triggers
+    Task --> Priority : priority
+    Task --> TaskCategory : category
+
+    %% Planning: the owner flattens tasks across pets into a one-day Schedule
+    User "1" o-- "0..*" Schedule : keeps one per date
+    User ..> Schedule : plan_day() creates and fills
+    Pet ..> Schedule : create_daily_schedule() fills
+    Schedule "1" o-- "0..*" Task : candidates, planned, skipped
+    Schedule ..> Reminder : send_reminders()
+
+    %% Recurrence: completing a daily/weekly task spawns its next occurrence
+    Task ..> Task : next_occurrence() creates copy
+    Pet ..> Task : complete_task() stores next occurrence
+
+    note for Schedule "Alias: Scheduler.\nsort_by_time, filter_tasks and detect_conflicts\naccept any task list (default: candidate_tasks)."
+    note for User "Alias: Owner. plan_day() is the main entry point."
+    note for Task "pet_name is stamped by Pet.add_task().\ndue_date keeps a next occurrence out of plans until its day."
