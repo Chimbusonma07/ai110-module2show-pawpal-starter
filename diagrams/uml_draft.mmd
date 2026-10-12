@@ -1,0 +1,92 @@
+classDiagram
+    %% PawPal+ — pet care planning assistant
+    %% Draft UML based on the System Design brainstorm in reflection.md
+
+    class User {
+        +str name
+        +str email
+        +str phone_number
+        +str address
+        +list~Pet~ pets
+        +list~Schedule~ schedules
+        +add_pet(pet) Pet
+        +get_pet(name) Pet
+        +set_availability(date, start_time, minutes) Schedule
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +list~str~ medical_notes
+        +list~Task~ tasks
+        +add_task(task) Task
+        +remove_task(name) bool
+        +get_tasks_by_priority(level) list~Task~
+        +create_daily_schedule(schedule) Schedule
+    }
+
+    class Task {
+        +str name
+        +TaskCategory category
+        +int duration_minutes
+        +Priority priority
+        +bool is_recurring
+        +str recurrence
+        +str scheduled_time
+        +list~Reminder~ reminders
+        +add_reminder(reminder) Reminder
+        +priority_score() int
+        +fits_in(minutes_left) bool
+        +is_due_today(date) bool
+    }
+
+    class Reminder {
+        +str message
+        +str remind_at
+        +bool recurring
+        +bool sent
+        +send() str
+        +snooze(minutes) None
+    }
+
+    class Schedule {
+        +str date
+        +str start_time
+        +int available_minutes
+        +list~Task~ planned_tasks
+        +list~Task~ skipped_tasks
+        +add_task(task) None
+        +schedule_tasks() list~Task~
+        +generate_daily_plan() list~Task~
+        +explain_plan() str
+        +total_planned_minutes() int
+        +remaining_minutes() int
+        +send_reminders() list~str~
+    }
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+    }
+
+    class TaskCategory {
+        <<enumeration>>
+        WALK
+        FEEDING
+        MEDICATION
+        GROOMING
+        VET
+        ENRICHMENT
+    }
+
+    User "1" o-- "0..*" Pet : owns
+    User "1" o-- "0..*" Schedule : sets availability for
+    Pet "1" o-- "0..*" Task : needs
+    Task "1" *-- "0..*" Reminder : triggers
+    Schedule "1" o-- "0..*" Task : plans
+    Task ..> Priority : uses
+    Task ..> TaskCategory : uses
