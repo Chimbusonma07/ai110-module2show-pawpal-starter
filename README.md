@@ -55,15 +55,17 @@ Portion 2:
 
 ```bash
 # Run the full test suite:
-pytest
+python -m pytest
 
 # Run with coverage:
 pytest --cov
 ```
 
 Sample test output:
+Confidence Level: 4
 ```
 ![alt text](image-2.png)
+![alt text](image-3.png)
 ```
 
 ## 📐 Smarter Scheduling
@@ -79,14 +81,12 @@ All scheduling logic lives in [`pawpal_system.py`](pawpal_system.py). `Scheduler
 
 ### Sorting by time: `Scheduler.sort_by_time(tasks=None)`
 
-Returns tasks ordered by `scheduled_time`, earliest first. The sort key is a lambda, `lambda task: (task.scheduled_time == "", task.scheduled_time)`:
+Returns tasks ordered by `scheduled_time`, earliest first. The sort key is a lambda, `lambda task: _time_sort_key(task.scheduled_time)`, which returns the pair `(time_is_missing, "HH:MM")`:
 
-- Zero-padded `"HH:MM"` strings sort correctly as plain text (`"07:05" < "09:00" < "14:30"`), so no time parsing is needed.
-- The first part of the key puts tasks with no time **last** instead of first.
+- Each time is re-formatted zero-padded first, so `"7:30"` sorts as `"07:30"` (before `"10:00"`, not after it as plain text would). Once padded, `"HH:MM"` strings sort correctly as text (`"07:05" < "09:00" < "14:30"`).
+- The first part of the key puts tasks with no time, or an unreadable one, **last** instead of first.
 - Tasks with the same time keep their original order (the sort is stable).
 - Returns a new list and leaves the input unchanged. Defaults to the schedule's candidate tasks.
-
-Limitation: times must be zero-padded. `"7:30"` sorts after `"10:00"`.
 
 The day plan uses a separate sort. `Scheduler.schedule_tasks()` orders tasks by `Task.priority_score()` (highest first), then shorter duration, then name, and fits as many as it can into the available minutes. Medication and vet tasks get a small score bonus that breaks ties within a priority level, but never lifts them above a higher priority.
 

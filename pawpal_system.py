@@ -24,6 +24,18 @@ def _add_minutes(clock: str, minutes: int) -> str:
     return (base + timedelta(minutes=minutes)).strftime(_TIME_FORMAT)
 
 
+def _time_sort_key(clock: str) -> tuple[bool, str]:
+    """Return a sort key that orders "HH:MM" times by clock, blanks last.
+
+    The time is re-formatted zero-padded, so "7:30" sorts as "07:30" rather
+    than after "10:00". Blank or unreadable times sort to the end.
+    """
+    try:
+        return (False, datetime.strptime(clock, _TIME_FORMAT).strftime(_TIME_FORMAT))
+    except ValueError:
+        return (True, clock)
+
+
 def _weekday_of(date: str) -> str:
     """Return the lowercase three-letter weekday for a "YYYY-MM-DD" string."""
     try:
@@ -173,8 +185,11 @@ class Task:
         """
         if self.is_complete:
             return None
+        # Build the copy first: a bad date raises here, before the task is
+        # marked done, so a retry can still create the next occurrence.
+        next_task = self.next_occurrence(on_date)
         self.is_complete = True
-        return self.next_occurrence(on_date)
+        return next_task
 
     def next_occurrence(self, on_date: str = "") -> Task | None:
         """Return a new task for the next daily/weekly occurrence, else None.
@@ -334,13 +349,13 @@ class Schedule:
     def sort_by_time(self, tasks: list[Task] | None = None) -> list[Task]:
         """Return tasks ordered by scheduled_time, earliest first.
 
-        The sort key is a lambda that returns a pair:
-        `(task.scheduled_time == "", task.scheduled_time)`. Python compares the
-        pairs item by item, so the first item (False before True) puts every
-        timed task ahead of the untimed ones, and the second orders the timed
-        tasks by clock. Zero-padded "HH:MM" strings sort correctly as plain
-        text ("07:05" < "09:00" < "14:30"), so no time parsing is needed.
-        An unpadded time such as "7:30" would sort after "10:00".
+        The sort key is a lambda that returns a pair from _time_sort_key():
+        `(time_is_missing, "HH:MM")`. Python compares the pairs item by item,
+        so the first item (False before True) puts every timed task ahead of
+        blank or unreadable ones, and the second orders the timed tasks by
+        clock. Times are re-formatted zero-padded first, because plain text
+        comparison would put "7:30" after "10:00"; once padded, "HH:MM"
+        strings sort correctly as text ("07:05" < "09:00" < "14:30").
 
         The sort is stable: tasks with the same time keep their input order.
         Runs in O(n log n) time.
@@ -353,10 +368,7 @@ class Schedule:
         """
         if tasks is None:
             tasks = self.candidate_tasks
-        return sorted(
-            tasks,
-            key=lambda task: (task.scheduled_time == "", task.scheduled_time),
-        )
+        return sorted(tasks, key=lambda task: _time_sort_key(task.scheduled_time))
 
     def filter_tasks(
         self,
